@@ -222,7 +222,7 @@ void loop() {
 
 	#ifdef DC_PUMP_MOTOR
 		if (pump_speed_percent != au16data[DC_PUMP_SPEED_POSITION]) {
-			pump_speed_percent == au16data[DC_PUMP_SPEED_POSITION];
+			pump_speed_percent = au16data[DC_PUMP_SPEED_POSITION];
 			analogWrite(map(pump_speed_percent, 0, 100, 0, 255), DC_PUMP_SPEED_CONTROL_PIN);
 		}
 	#endif // DC_PUMP_MOTOR
