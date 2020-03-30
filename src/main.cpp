@@ -6,14 +6,19 @@ OBJ: Execution of ModBus commands
 
 #define DC_PUMP_MOTOR  //enable/disable PWM control of pump (pump v2)
 #define DC_PUMP_MOTOR_SENSE //enable/disable sensing of pump speed via hall effect sensor
+#define DC_PUMP_POWER_MEASURE //enable/disable measuring of voltage, current, power of pump
 
 #include <Arduino.h>
 #include <ModbusRtu.h>
 #include <AccelStepper.h>
+#ifdef DC_PUMP_POWER_MEASURE
+#include <SPI.h>
+#include <Adafruit_INA219.h>
+#endif
 
 //general config paramters
 constexpr int CHIP_ID = 5; //modbus ID 
-constexpr int VECTOR_LENGHT = 17;
+constexpr int VECTOR_LENGHT = 12;
 constexpr int MICROSTEPPING = 8;
 
 //data array positions for modbus network sharing
@@ -30,25 +35,23 @@ constexpr int MODBUS_ERROR_COUNT_VECTOR_POSITION = 7;
 
 constexpr int DC_PUMP_SPEED_POSITION = 8;
 constexpr int DC_PUMP_RPM_FROM_SENS_POSITION = 9;
+constexpr int DC_PUMP_VOLTAGE_POSITION = 10;
+constexpr int DC_PUMP_CURRENT_POSITION = 11;
 
 //arduino pin configuration
-constexpr int U8TXENPIN = A5;
+constexpr int U8TXENPIN = 6;
 
-constexpr int STEPPER1_CURRENT_PIN_MOVING = A3;
-
-constexpr int STEPPER1_DIRECTION_PIN = 5;
-constexpr int STEPPER1_STEP_PIN = 6;
-
-constexpr int STEPPER2_DIRECTION_PIN = 3;
-constexpr int STEPPER2_STEP_PIN = 4;
+constexpr int STEPPER1_CURRENT_PIN_MOVING = 3;
+constexpr int STEPPER1_DIRECTION_PIN = 8;
+constexpr int STEPPER1_STEP_PIN = 7;
 
 //stepper variabiles
-bool stepper_vapour_resetting = true;
+bool stepper_resetting = true;
 unsigned int stepper_old_speed, stepper_old_acceleration;
 unsigned int stepper_current_delay = 200; //to make sure stepper driver reaches new current conditions
 
 #ifdef DC_PUMP_MOTOR
-constexpr int DC_PUMP_SPEED_CONTROL_PIN = 11;
+constexpr int DC_PUMP_SPEED_CONTROL_PIN = 9;
 #endif // DC_PUMP_MOTOR
 
 #ifdef DC_PUMP_MOTOR_SENSE
@@ -63,6 +66,12 @@ constexpr int RPM_UPDATE_TIME = 10; //in seconds
 unsigned int pump_speed_percent = 0;
 #endif // DC_PUMP_MOTOR
 
+#ifdef DC_PUMP_POWER_MEASURE
+float current_mA = 0;
+float loadvoltage_mV = 0;
+unsigned long last_motor_power_update = 0;
+constexpr int POWER_UPDATE_TIME = 2; //in seconds
+#endif
 
 //data array for modbus network sharing
 uint16_t au16data[VECTOR_LENGHT] = {
@@ -75,7 +84,9 @@ uint16_t au16data[VECTOR_LENGHT] = {
  0, //OUT count
  0, //ERROR count
  0, //DC pump motor speed
- 0 //DC pump motor speed read from sensor
+ 0, //DC pump motor speed read from sensor
+ 0, //DC pump voltage
+ 0 //DC pump current
 };
 
 /*
@@ -87,9 +98,9 @@ uint16_t au16data[VECTOR_LENGHT] = {
  */
 
 Modbus slave(CHIP_ID, 0, U8TXENPIN);
-AccelStepper stepper_vapour(1, STEPPER1_STEP_PIN, STEPPER1_DIRECTION_PIN); //step, dir
+AccelStepper stepper(1, STEPPER1_STEP_PIN, STEPPER1_DIRECTION_PIN); //step, dir
+Adafruit_INA219 ina219;
 
-#ifndef DANFOSS
 void set_holding_current(int stepper_number) {
 	digitalWrite(STEPPER1_CURRENT_PIN_MOVING, LOW);
 }
@@ -100,8 +111,8 @@ void set_moving_current(int stepper_number) {
 }
 
 void set_stepper_SA() {
-	stepper_vapour.setMaxSpeed(au16data[STEPPER_SPEED_VECTOR_POSITION]);
-	stepper_vapour.setAcceleration(au16data[STEPPER_ACCELERATION_VECTOR_POSITION]);
+	stepper.setMaxSpeed(au16data[STEPPER_SPEED_VECTOR_POSITION]);
+	stepper.setAcceleration(au16data[STEPPER_ACCELERATION_VECTOR_POSITION]);
 
 	stepper_old_speed = au16data[STEPPER_SPEED_VECTOR_POSITION];
 	stepper_old_acceleration = au16data[STEPPER_ACCELERATION_VECTOR_POSITION];
@@ -113,7 +124,7 @@ void reset_vapour_position() {
 	//in order to maintain a known reference
 	set_stepper_SA();
 	set_moving_current(0);
-	stepper_vapour.move(-510 * MICROSTEPPING); //set an open move to stall
+	stepper.move(-510 * MICROSTEPPING); //set an open move to stall
 
 	/* CHECK NEW RESET POSITION IS WORKING
 	while (stepper_vapour.distanceToGo() != 0) {
@@ -124,7 +135,6 @@ void reset_vapour_position() {
 	set_stepper_SA(); //setCurrentPosition has side effect of setting stepper speed to 0, re-issue update of speed and acceleration
 	*/
 }
-#endif //!DANFOSS
 
 unsigned int l_2uint_int1(long long_number) { //split the long and return first unsigned integer
 	union l_2uint {
@@ -147,18 +157,23 @@ unsigned int l_2uint_int2(long long_number) { //split the long and return second
 }
 
 void update_modbus_data() {
-	au16data[STEPPER1_POS1_VECTOR_POSITION] = l_2uint_int1(stepper_vapour.currentPosition() / 8); //split the long into 2 unsigned integers
-	au16data[STEPPER1_POS2_VECTOR_POSITION] = l_2uint_int2(stepper_vapour.currentPosition());
+	au16data[STEPPER1_POS1_VECTOR_POSITION] = l_2uint_int1(stepper.currentPosition() / 8); //split the long into 2 unsigned integers
+	au16data[STEPPER1_POS2_VECTOR_POSITION] = l_2uint_int2(stepper.currentPosition());
 
-#ifdef DC_PUMP_MOTOR_SENSE
+	#ifdef DC_PUMP_MOTOR_SENSE
 	au16data[DC_PUMP_RPM_FROM_SENS_POSITION] = rpm_out;
-#endif // DC_PUMP_MOTOR_SENSE
+	#endif // DC_PUMP_MOTOR_SENSE
 
 	au16data[MODBUS_IN_COUNT_VECTOR_POSITION] = slave.getInCnt(); //important to update for stepper move logic
 	au16data[MODBUS_OUT_COUNT_VECTOR_POSITION] = slave.getOutCnt();
 	au16data[MODBUS_ERROR_COUNT_VECTOR_POSITION] = slave.getErrCnt();
 
 	au16data[STEPPER1_POS1_VECTOR_POSITION] = 500 - au16data[STEPPER1_STEPS_VECTOR_POSITION];
+
+	#ifdef DC_PUMP_POWER_MEASURE
+	au16data[DC_PUMP_VOLTAGE_POSITION] = loadvoltage_mV;
+	au16data[DC_PUMP_CURRENT_POSITION] = current_mA;
+	#endif
 }
 
 #ifdef DC_PUMP_MOTOR_SENSE
@@ -173,37 +188,41 @@ void setup() {
 	slave.begin(9600); //9600 baud, 8-bits, 1-bit stop
 	reset_vapour_position();
 
-#ifdef DC_PUMP_MOTOR
+	#ifdef DC_PUMP_MOTOR
 	pinMode(DC_PUMP_SPEED_CONTROL_PIN, OUTPUT);
-#endif // DC_PUMP_MOTOR
+	#endif // DC_PUMP_MOTOR
 
-#ifdef DC_PUMP_MOTOR_SENSE
+	#ifdef DC_PUMP_MOTOR_SENSE
 	attachInterrupt(digitalPinToInterrupt(DC_PUMP_SPEED_SENSE_PIN), addrev, RISING);
-#endif // DC_PUMP_MOTOR_SENSE
+	#endif // DC_PUMP_MOTOR_SENSE
+
+	#ifdef DC_PUMP_POWER_MEASURE
+	ina219.begin();
+	#endif
 }
 
 void loop() {
 	slave.poll(au16data, VECTOR_LENGHT); //Modbus magic
-	stepper_vapour.run(); //Stepper magic
+	stepper.run(); //Stepper magic
 
-	if (!stepper_vapour_resetting) {
+	if (!stepper_resetting) {
 		//if new values of stepper speed / acceleration are provided, update accelstepper values
 		if (stepper_old_speed != au16data[STEPPER_SPEED_VECTOR_POSITION] || stepper_old_acceleration != au16data[STEPPER_ACCELERATION_VECTOR_POSITION]) {
 			set_stepper_SA();
 		}
 
-		if (au16data[STEPPER1_STEPS_VECTOR_POSITION] != stepper_vapour.currentPosition() && au16data[MODBUS_IN_COUNT_VECTOR_POSITION] != slave.getInCnt()) {
+		if (au16data[STEPPER1_STEPS_VECTOR_POSITION] != stepper.currentPosition() && au16data[MODBUS_IN_COUNT_VECTOR_POSITION] != slave.getInCnt()) {
 			//if stepper is not where i want and just received a command, set new position to reach
 			set_moving_current(0);
-			stepper_vapour.moveTo(au16data[STEPPER1_STEPS_VECTOR_POSITION] * MICROSTEPPING);
+			stepper.moveTo(au16data[STEPPER1_STEPS_VECTOR_POSITION] * MICROSTEPPING);
 		}
 	} 
 	else {
-		if (stepper_vapour.distanceToGo() == 0) {
-			stepper_vapour.setCurrentPosition(0); //reset position, side effect of setting stepper speed to 0
+		if (stepper.distanceToGo() == 0) {
+			stepper.setCurrentPosition(0); //reset position, side effect of setting stepper speed to 0
 			update_modbus_data();
 			set_stepper_SA(); //setCurrentPosition has side effect of setting stepper speed to 0, re-issue update of speed and acceleration
-			stepper_vapour_resetting = false;
+			stepper_resetting = false;
 		}
 	}
 
@@ -216,14 +235,21 @@ void loop() {
 	
 	update_modbus_data();
 
-	if (stepper_vapour.distanceToGo() == 0) { //reduce power to stepper if move is complete
+	if (stepper.distanceToGo() == 0) { //reduce power to stepper if move is complete
 		set_holding_current(0);
   }
 
 	#ifdef DC_PUMP_MOTOR
-		if (pump_speed_percent != au16data[DC_PUMP_SPEED_POSITION]) {
-			pump_speed_percent = au16data[DC_PUMP_SPEED_POSITION];
-			analogWrite(map(pump_speed_percent, 0, 100, 0, 255), DC_PUMP_SPEED_CONTROL_PIN);
-		}
+	if (pump_speed_percent != au16data[DC_PUMP_SPEED_POSITION]) {
+		pump_speed_percent = au16data[DC_PUMP_SPEED_POSITION];
+		analogWrite(map(pump_speed_percent, 0, 100, 0, 255), DC_PUMP_SPEED_CONTROL_PIN);
+	}
 	#endif // DC_PUMP_MOTOR
+
+	#ifdef DC_PUMP_POWER_MEASURE
+	if (millis() - last_motor_power_update > POWER_UPDATE_TIME * 1000) {
+		current_mA = (int)ina219.getCurrent_mA();
+		loadvoltage_mV = (int)ina219.getBusVoltage_V() * 1000 + ina219.getShuntVoltage_mV();
+	}
+	#endif
 }
