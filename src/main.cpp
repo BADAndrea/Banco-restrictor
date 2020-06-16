@@ -20,6 +20,8 @@ OBJ: Execution of ModBus commands
 constexpr int CHIP_ID = 5; //modbus ID 
 constexpr int VECTOR_LENGHT = 12;
 constexpr int MICROSTEPPING = 8;
+constexpr int STEPPER_LOW_CURRENT = 50; //approx 1v -> 150mA
+constexpr int STEPPER_HIGH_CURRENT = 127; //approx 2.5v -> 400mA
 
 //data array positions for modbus network sharing
 constexpr int STEPPER_SPEED_VECTOR_POSITION = 0;
@@ -102,11 +104,11 @@ AccelStepper stepper(1, STEPPER1_STEP_PIN, STEPPER1_DIRECTION_PIN); //step, dir
 Adafruit_INA219 ina219;
 
 void set_holding_current(int stepper_number) {
-	digitalWrite(STEPPER1_CURRENT_PIN_MOVING, LOW);
+	analogWrite(STEPPER1_CURRENT_PIN_MOVING, STEPPER_LOW_CURRENT);
 }
 
 void set_moving_current(int stepper_number) {
-	digitalWrite(STEPPER1_CURRENT_PIN_MOVING, HIGH);
+	analogWrite(STEPPER1_CURRENT_PIN_MOVING, STEPPER_HIGH_CURRENT);
 	delay(stepper_current_delay); //delay to possibly give enought time to driver to reach new current (probably doesn't matter)
 }
 
@@ -184,6 +186,7 @@ void addrev() {
 
 void setup() {
 	pinMode(STEPPER1_CURRENT_PIN_MOVING, OUTPUT);
+	analogWrite(STEPPER1_CURRENT_PIN_MOVING, STEPPER_LOW_CURRENT);
 
 	slave.begin(9600); //9600 baud, 8-bits, 1-bit stop
 	reset_vapour_position();
@@ -237,7 +240,7 @@ void loop() {
 
 	if (stepper.distanceToGo() == 0) { //reduce power to stepper if move is complete
 		set_holding_current(0);
-  }
+	}
 
 	#ifdef DC_PUMP_MOTOR
 	if (pump_speed_percent != au16data[DC_PUMP_SPEED_POSITION]) {
