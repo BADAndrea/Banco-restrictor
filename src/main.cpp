@@ -50,7 +50,7 @@ constexpr int STEPPER1_STEP_PIN = 7;
 //stepper variabiles
 bool stepper_resetting = true;
 unsigned int stepper_old_speed, stepper_old_acceleration;
-unsigned int stepper_current_delay = 200; //to make sure stepper driver reaches new current conditions
+unsigned int stepper_current_delay = 300; //to make sure stepper driver reaches new current conditions
 
 #ifdef DC_PUMP_MOTOR
 constexpr int DC_PUMP_SPEED_CONTROL_PIN = 9;
