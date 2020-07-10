@@ -51,6 +51,7 @@ constexpr int STEPPER1_STEP_PIN = 7;
 bool stepper_resetting = true;
 unsigned int stepper_old_speed, stepper_old_acceleration;
 unsigned int stepper_current_delay = 300; //to make sure stepper driver reaches new current conditions
+unsigned long stepper_move_command_time = 0;
 
 #ifdef DC_PUMP_MOTOR
 constexpr int DC_PUMP_SPEED_CONTROL_PIN = 9;
@@ -109,7 +110,7 @@ void set_holding_current(int stepper_number) {
 
 void set_moving_current(int stepper_number) {
 	analogWrite(STEPPER1_CURRENT_PIN_MOVING, STEPPER_HIGH_CURRENT);
-	delay(stepper_current_delay); //delay to possibly give enought time to driver to reach new current (probably doesn't matter)
+	stepper_move_command_time = millis();
 }
 
 void set_stepper_SA() {
@@ -127,15 +128,6 @@ void reset_vapour_position() {
 	set_stepper_SA();
 	set_moving_current(0);
 	stepper.move(-510 * MICROSTEPPING); //set an open move to stall
-
-	/* CHECK NEW RESET POSITION IS WORKING
-	while (stepper_vapour.distanceToGo() != 0) {
-		stepper_vapour.run();
-	}
-	stepper_vapour.setCurrentPosition(0); //reset position, side effect of setting stepper speed to 0
-	update_modbus_data();
-	set_stepper_SA(); //setCurrentPosition has side effect of setting stepper speed to 0, re-issue update of speed and acceleration
-	*/
 }
 
 unsigned int l_2uint_int1(long long_number) { //split the long and return first unsigned integer
@@ -206,7 +198,10 @@ void setup() {
 
 void loop() {
 	slave.poll(au16data, VECTOR_LENGHT); //Modbus magic
-	stepper.run(); //Stepper magic
+	
+	if (millis() - stepper_move_command_time >= stepper_current_delay) {
+		stepper.run(); //Stepper magic
+	}
 
 	if (!stepper_resetting) {
 		//if new values of stepper speed / acceleration are provided, update accelstepper values
