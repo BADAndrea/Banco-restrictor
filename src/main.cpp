@@ -2,11 +2,12 @@
 OBJ: Execution of ModBus commands
 	- control of stepper
 	- control of DC motor
+	- monitor Volage, current and power consumed by DC motor
 */
 
 #define DC_PUMP_MOTOR  //enable/disable PWM control of pump (pump v2)
 #define DC_PUMP_MOTOR_SENSE //enable/disable sensing of pump speed via hall effect sensor
-#define DC_PUMP_POWER_MEASURE //enable/disable measuring of voltage, current, power of pump
+//#define DC_PUMP_POWER_MEASURE //enable/disable measuring of voltage, current, power of pump
 
 #include <Arduino.h>
 #include <ModbusRtu.h>
@@ -102,7 +103,9 @@ uint16_t au16data[VECTOR_LENGHT] = {
 
 Modbus slave(CHIP_ID, 0, U8TXENPIN);
 AccelStepper stepper(1, STEPPER1_STEP_PIN, STEPPER1_DIRECTION_PIN); //step, dir
+#ifdef DC_PUMP_POWER_MEASURE
 Adafruit_INA219 ina219;
+#endif
 
 void set_holding_current(int stepper_number) {
 	analogWrite(STEPPER1_CURRENT_PIN_MOVING, STEPPER_LOW_CURRENT);
