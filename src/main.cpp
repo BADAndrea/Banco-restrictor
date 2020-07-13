@@ -211,12 +211,11 @@ void setup() {
 
 	#ifdef DC_PUMP_POWER_MEASURE
 	ina219.begin();
-	#endif
-
 	for (int thisReading = 0; thisReading < numReadings; thisReading++) {
 		current_readings[thisReading] = 0;
 		voltage_readings [thisReading] = 0;
-  	}
+	}
+	#endif
 }
 
 void loop() {
