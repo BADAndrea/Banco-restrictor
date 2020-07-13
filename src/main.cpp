@@ -6,7 +6,7 @@ OBJ: Execution of ModBus commands
 */
 
 #define DC_PUMP_MOTOR  //enable/disable PWM control of pump (pump v2)
-#define DC_PUMP_MOTOR_SENSE //enable/disable sensing of pump speed via hall effect sensor
+//#define DC_PUMP_MOTOR_SENSE //enable/disable sensing of pump speed via hall effect sensor
 //#define DC_PUMP_POWER_MEASURE //enable/disable measuring of voltage, current, power of pump
 
 #include <Arduino.h>
@@ -74,7 +74,22 @@ unsigned int pump_speed_percent = 0;
 float current_mA = 0;
 float loadvoltage_mV = 0;
 unsigned long last_motor_power_update = 0;
-constexpr int POWER_UPDATE_TIME = 2; //in seconds
+constexpr int POWER_UPDATE_TIME = 200; //in milliseconds
+
+// Define the number of samples to keep track of. The higher the number, the
+// more the readings will be smoothed, but the slower the output will respond to
+// the input. Using a constant rather than a normal variable lets us use this
+// value to determine the size of the readings array.
+const int numReadings = 20;
+int readIndex = 0;              	// the index of the current reading
+
+int current_readings[numReadings];	// the readings from the analog input
+int current_total = 0;            	// the running total
+int current_average = 0;     			// the average
+
+int voltage_readings[numReadings];
+int voltage_total = 0;
+int voltage_average = 0;
 #endif
 
 //data array for modbus network sharing
@@ -168,8 +183,8 @@ void update_modbus_data() {
 	au16data[STEPPER1_POS1_VECTOR_POSITION] = 500 - au16data[STEPPER1_STEPS_VECTOR_POSITION];
 
 	#ifdef DC_PUMP_POWER_MEASURE
-	au16data[DC_PUMP_VOLTAGE_POSITION] = loadvoltage_mV;
-	au16data[DC_PUMP_CURRENT_POSITION] = current_mA;
+	au16data[DC_PUMP_VOLTAGE_POSITION] = voltage_average;
+	au16data[DC_PUMP_CURRENT_POSITION] = current_average;
 	#endif
 }
 
@@ -197,6 +212,11 @@ void setup() {
 	#ifdef DC_PUMP_POWER_MEASURE
 	ina219.begin();
 	#endif
+
+	for (int thisReading = 0; thisReading < numReadings; thisReading++) {
+		current_readings[thisReading] = 0;
+		voltage_readings [thisReading] = 0;
+  	}
 }
 
 void loop() {
@@ -248,9 +268,26 @@ void loop() {
 	#endif // DC_PUMP_MOTOR
 
 	#ifdef DC_PUMP_POWER_MEASURE
-	if (millis() - last_motor_power_update > POWER_UPDATE_TIME * 1000) {
+	if (millis() - last_motor_power_update > POWER_UPDATE_TIME) {
 		current_mA = (int)ina219.getCurrent_mA();
 		loadvoltage_mV = (int)ina219.getBusVoltage_V() * 1000 + ina219.getShuntVoltage_mV();
+
+		//a bit of rolling average
+		current_total -= current_readings[readIndex];
+		current_readings[readIndex] = current_mA;
+		current_total += current_readings[readIndex];
+
+		voltage_total -= voltage_readings[readIndex];
+		voltage_readings[readIndex] = loadvoltage_mV;
+		voltage_total += voltage_readings[readIndex];
+
+		readIndex = readIndex + 1;
+		if (readIndex >= numReadings) {
+			readIndex = 0;
+		}
+
+		current_average = current_total / numReadings;
+		voltage_average = voltage_total / numReadings;
 	}
 	#endif
 }
